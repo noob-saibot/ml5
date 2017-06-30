@@ -1,17 +1,18 @@
 import pandas as pd
-from sklearn.model_selection import train_test_split, cross_val_score, learning_curve, cross_val_predict
-from sklearn.linear_model import LogisticRegression, LinearRegression
-from sklearn.ensemble import ExtraTreesClassifier, GradientBoostingClassifier, ExtraTreesRegressor
+from sklearn.model_selection import train_test_split, learning_curve, cross_val_predict
+from sklearn.linear_model import LogisticRegression, LinearRegression, SGDClassifier
+from sklearn.ensemble import ExtraTreesClassifier, GradientBoostingClassifier, ExtraTreesRegressor, AdaBoostClassifier
 from sklearn.svm import LinearSVC, SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import make_scorer, log_loss
-from sklearn.model_selection import ShuffleSplit
+from sklearn.metrics import make_scorer, log_loss, roc_auc_score, accuracy_score
+from sklearn.model_selection import ShuffleSplit, cross_val_score
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
-from seaborn import set_style
-set_style()
+from xgboost import XGBClassifier
+import xgbfir
+
 
 def plot_learning_curve(estimator, title, X, y, ylim=None, cv=None,
                         n_jobs=1, train_sizes=np.linspace(.1, 1.0, 5)):
@@ -42,23 +43,117 @@ def plot_learning_curve(estimator, title, X, y, ylim=None, cv=None,
     plt.legend(loc="best")
     return plt
 
+def counter(df, dst):
+    for i in range(90, 100, 1):
+        print(i/100.0, df[dst][np.round(df[dst], 2) == i/100.0].size, '###', (100-i)/100.0, df[dst][np.round(df[dst], 2) == (100-i)/100.0].size)
+
 def main():
-    df_train = pd.read_csv('ml5/train.csv', delimiter=';')
-    df_test = pd.read_csv('ml5/test.csv', delimiter=';')
+    df_train = pd.read_csv('ml5/train.csv', delimiter=';', na_values=None)
+    df_test = pd.read_csv('ml5/test.csv', delimiter=';', na_values=None)
+    df_test.fillna(df_test.mean(), inplace=True)
+    df_sub = pd.read_csv('ml5/submit.csv', delimiter=';', names=[0])
 
     df_train = pd.concat([df_train, df_test], axis=0, ignore_index=True)
 
-    df_train = df_train.replace('None', np.nan)
-    for i in df_train.drop(['id', 'cardio'], axis=1).dropna().columns:
-        df_train[i] = df_train[i].astype('float')
-        cond = (df_train[i] > df_train[i].quantile(0.999)) | (df_train[i] < df_train[i].quantile(0.001))
-        print(df_train[i][cond])
-        df_train[i][cond] = df_train[i].mean()
-        #print(df_train[i].dropna())
-        # print(i)
-        # df_train[i].astype('float').hist()
-        # plt.show()
+    df_train['opt_w'] = (50 + 0.75 * (df_train['height'] - 150) + (df_train['age']/365 - 20)) / df_train['weight']
 
+    # df_train.drop(['weight'], axis=1, inplace=True)
+
+    # df_train['opt_age_ap_hi'] = (102 + 0.6 * (df_train['age']/365))/df_train['ap_hi']
+    # df_train['opt_age_ap_lo'] = (63 + 0.5 * (df_train['age']/365))/df_train['ap_lo']
+
+    # df_train['opt_ap'] = df_train['ap_hi']/df_train['ap_lo']
+
+    df_train.drop(['id'
+                      #, 'ap_hi', 'ap_lo'
+                   ], axis=1, inplace=True)
+
+    df_train['gender'] = df_train['gender'].astype('str')
+
+    df_train = pd.get_dummies(df_train, columns=['gender'])
+
+    df_train = df_train.convert_objects(convert_numeric=True)
+
+    df_train = df_train.replace(np.inf, np.nan)
+
+    df_train.fillna(df_train.drop(['cardio'], axis=1).mean(), inplace=True)
+
+    df_train = df_train.replace('None', np.nan)
+    # for i in df_train.drop(['cardio'], axis=1).dropna().columns:
+    #     df_train[i] = df_train[i].astype('float')
+    #     cond = (df_train[i] > df_train[i].quantile(0.999)) | (df_train[i] < df_train[i].quantile(0.001))
+    #     df_train[i][cond] = df_train[i].mean()
+
+    # df_train['age'] = df_train['age']/365
+
+    for i in df_train.drop(['cardio'], axis=1).columns:
+        df_train[i] = (df_train[i] - df_train[i].mean()) / (df_train[i].max() - df_train[i].min())
+
+    print(df_train)
+
+    # df_train['opt_ap_hi'] = (109 + (0.5 * df_train['age'] / 365) + (0.1 * df_train['weight'])) / df_train['ap_hi']
+    #
+    # df_train['opt_ap_lo'] = (63 + (0.1 * df_train['age'] / 365) + (0.15 * df_train['weight'])) / df_train['ap_lo']
+
+    df_test = df_train[df_train['cardio'].isnull()]
+
+    df_train.dropna(axis=0, inplace=True)
+
+    dx, dxt, dy, dyt = train_test_split(df_train.drop(['cardio'], axis=1), df_train.cardio, train_size=0.95)
+
+    # model = ExtraTreesClassifier(n_estimators=1000, n_jobs=3, max_features='sqrt', max_depth=10)
+    # model = AdaBoostClassifier()
+    # model = LogisticRegression()
+    # model = SVC(probability=True)
+    # model = GradientBoostingClassifier(max_depth=4)
+    model = XGBClassifier(max_depth=4, learning_rate=0.01, objective='binary:logistic',
+                            subsample=0.8, colsample_bytree=0.8, n_estimators=5000)
+
+    print(dx.shape, dxt.shape)
+
+
+
+    # xgbfir.saveXgbFI(model, feature_names=dx.columns, OutputXlsxFile='ml_features.xlsx')
+
+    # title = "Learning Curves"
+    # cv = ShuffleSplit(n_splits=6, test_size=0.2)
+    # plot_learning_curve(model, title, dx, dy, cv=cv, n_jobs=3)
+
+    # plt.show()
+
+    # print(-cross_val_score(model, df_train.drop(['cardio'], axis=1), df_train.cardio, cv=6, scoring='neg_log_loss',
+    #                        n_jobs=3).mean(),
+    #                        fit_params={'early_stopping_rounds':50,
+    #                                    'eval_metric':'logloss',
+    #                                    'eval_set':[(dx, dy), (dxt, dyt)]}
+    #       )
+
+    model.fit(dx, dy,
+              eval_metric='logloss', eval_set=[(dx, dy), (dxt, dyt)]
+              , early_stopping_rounds=100
+              )
+
+    # print(list(zip(dx.columns,model.feature_importances_)))
+
+    pred = model.predict_proba(dx)
+    print('#################PRED:', log_loss(dy, pred[:,1]))
+    print('#################ROC: ', roc_auc_score(dy, pred[:,1]))
+    # counter(pd.DataFrame(pred), 0)
+
+    pred_t = model.predict_proba(dxt)
+    print('#################PRED_T: ', log_loss(dyt, pred_t[:,1]))
+    print('#################ROC: ', roc_auc_score(dyt, pred_t[:,1]))
+    # counter(pd.DataFrame(pred_t), 0)
+
+    df_sub[0] = model.predict_proba(df_test.drop(['cardio'], axis=1))[:,1]
+    print(model.predict_proba(df_test.drop(['cardio'], axis=1)))
+    print('#################SUB: ')
+    # counter(df_sub, 0)
+
+    # print(model.predict_proba(df_test.drop(['cardio'], axis=1)))
+    # print(df_sub)
+
+    df_sub.to_csv('sub_base.csv', index_label=False, index=False, header=False, sep=';')
 
 if __name__ == '__main__':
     main()

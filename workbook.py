@@ -5,12 +5,13 @@ from sklearn.ensemble import ExtraTreesClassifier, GradientBoostingClassifier, E
 from sklearn.svm import LinearSVC, SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import make_scorer, log_loss
+from sklearn.metrics import make_scorer, log_loss, roc_auc_score, accuracy_score
 from sklearn.model_selection import ShuffleSplit
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from xgboost import XGBClassifier
+import xgbfir
 
 
 def plot_learning_curve(estimator, title, X, y, ylim=None, cv=None,
@@ -56,13 +57,19 @@ def main():
 
     df_train['opt_w'] = (50 + 0.75 * (df_train['height'] - 150) + (df_train['age']/365 - 20)) / df_train['weight']
 
+    df_train.drop(['weight'], axis=1, inplace=True)
+
+    # df_train['opt_ap'] = df_train['ap_hi']/df_train['ap_lo']
+
     df_train.drop(['id'], axis=1, inplace=True)
 
     df_train['gender'] = df_train['gender'].astype('str')
 
-    # df_train = pd.get_dummies(df_train, columns=['gender'])
+    df_train = pd.get_dummies(df_train, columns=['gender'])
 
     df_train = df_train.convert_objects(convert_numeric=True)
+
+    df_train = df_train.replace(np.inf, np.nan)
 
     df_train.fillna(df_train.drop(['cardio'], axis=1).mean(), inplace=True)
 
@@ -74,48 +81,49 @@ def main():
 
     # df_train['age'] = df_train['age']/365
 
-    for i in df_train.drop(['cardio'], axis=1).columns:
-        df_train[i] = (df_train[i] - df_train[i].mean()) / (df_train[i].max() - df_train[i].min())
+    # for i in df_train.drop(['cardio'], axis=1).columns:
+    #     df_train[i] = (df_train[i] - df_train[i].mean()) / (df_train[i].max() - df_train[i].min())
 
     print(df_train)
 
-    df_train['opt_ap_hi'] = (109 + (0.5 * df_train['age'] / 365) + (0.1 * df_train['weight'])) / df_train['ap_hi']
-
-    df_train['opt_ap_lo'] = (63 + (0.1 * df_train['age'] / 365) + (0.15 * df_train['weight'])) / df_train['ap_lo']
+    # df_train['opt_ap_hi'] = (109 + (0.5 * df_train['age'] / 365) + (0.1 * df_train['weight'])) / df_train['ap_hi']
+    #
+    # df_train['opt_ap_lo'] = (63 + (0.1 * df_train['age'] / 365) + (0.15 * df_train['weight'])) / df_train['ap_lo']
 
     df_test = df_train[df_train['cardio'].isnull()]
 
     df_train.dropna(axis=0, inplace=True)
 
-    dx, dxt, dy, dyt = train_test_split(df_train.drop(['cardio'], axis=1),
-                                        df_train.cardio,
-                                        test_size=.05)
+    dx, dxt, dy, dyt = train_test_split(df_train.drop(['cardio'], axis=1), df_train.cardio, train_size=0.6)
 
-    model = ExtraTreesClassifier(max_depth=12, n_estimators=4000, n_jobs=3, max_features='log2')
+    # model = ExtraTreesClassifier(n_estimators=1000, n_jobs=3, max_features='sqrt', max_depth=10)
     # model = AdaBoostClassifier()
-    # model = LogisticRegression(C=0.01)
+    # model = LogisticRegression()
+    # model = SVC(probability=True)
     # model = GradientBoostingClassifier()
-    # model = XGBClassifier(max_depth=4, learning_rate=0.01, subsample=0.8, colsample_bytree=0.8, n_estimators=5000)
+    # model = XGBClassifier(objective='binary:logistic')
 
     print(dx.shape, dxt.shape)
-    title = "Learning Curves"
-    cv = ShuffleSplit(n_splits=6, test_size=0.2)
+    # title = "Learning Curves"
+    # cv = ShuffleSplit(n_splits=6, test_size=0.2)
     # plot_learning_curve(model, title, dx, dy, cv=cv, n_jobs=3)
 
     # plt.show()
 
     # print(-cross_val_score(model, df_train.drop(['cardio'], axis=1), df_train.cardio, cv=6, scoring='neg_log_loss', n_jobs=3).mean())
 
-    model.fit(dx, dy,
-              # eval_metric='logloss', eval_set=[(dx, dy), (dxt, dyt)]
-              )
+    model.fit(dx, dy)
+
+    print(list(zip(dx.columns,model.feature_importances_)))
 
     pred = model.predict_proba(dx)
-    print('#################PRED:', log_loss(dy, pred))
+    print('#################PRED:', log_loss(dy, pred[:,1]))
+    print('#################ROC: ', roc_auc_score(dy, pred[:,1]))
     counter(pd.DataFrame(pred), 0)
 
     pred_t = model.predict_proba(dxt)
-    print('#################PRED_T: ', log_loss(dyt, pred_t))
+    print('#################PRED_T: ', log_loss(dyt, pred_t[:,1]))
+    print('#################ROC: ', roc_auc_score(dyt, pred_t[:,1]))
     counter(pd.DataFrame(pred_t), 0)
 
     df_sub[0] = model.predict_proba(df_test.drop(['cardio'], axis=1))
