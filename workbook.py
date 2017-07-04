@@ -57,11 +57,19 @@ def main():
 
     df_train['opt_w'] = (50 + 0.75 * (df_train['height'] - 150) + (df_train['age']/365 - 20)) / df_train['weight']
 
-    df_train.drop(['weight'], axis=1, inplace=True)
+    df_train['imt'] = df_train['weight'] / (df_train['height'] ** 2)
+
+    df_train['opt_ap_hi'] = (109 + (0.5 * df_train['age'] / 365) + (0.1 * df_train['weight'])) / df_train['ap_hi']
+
+    df_train['opt_ap_lo'] = (63 + (0.1 * df_train['age'] / 365) + (0.15 * df_train['weight'])) / df_train['ap_lo']
+
+    df_train['minus'] = df_train['ap_hi'] - df_train['ap_lo']
+
+    # df_train.drop(['weight', 'ap_hi', 'ap_lo', 'height'], axis=1, inplace=True)
 
     # df_train['opt_ap'] = df_train['ap_hi']/df_train['ap_lo']
 
-    df_train.drop(['id'], axis=1, inplace=True)
+    # df_train.drop(['id'], axis=1, inplace=True)
 
     df_train['gender'] = df_train['gender'].astype('str')
 
@@ -71,37 +79,41 @@ def main():
 
     df_train = df_train.replace(np.inf, np.nan)
 
-    df_train.fillna(df_train.drop(['cardio'], axis=1).mean(), inplace=True)
-
-    df_train = df_train.replace('None', np.nan)
     for i in df_train.drop(['cardio'], axis=1).dropna().columns:
         df_train[i] = df_train[i].astype('float')
-        cond = (df_train[i] > df_train[i].quantile(0.99)) | (df_train[i] < df_train[i].quantile(0.01))
-        df_train[i][cond] = df_train[i].mean()
+        tm = df_train.groupby(i)['age'].nunique()
+        if tm.size == 2 or tm.size == 3:
+            df_train[i].fillna(tm.idxmax(), inplace=True)
+        else:
+            df_train[i].fillna(df_train[i].mean(), inplace=True)
 
-    # df_train['age'] = df_train['age']/365
+    # df_train.fillna(df_train.drop(['cardio'], axis=1).mean(), inplace=True)
 
-    # for i in df_train.drop(['cardio'], axis=1).columns:
-    #     df_train[i] = (df_train[i] - df_train[i].mean()) / (df_train[i].max() - df_train[i].min())
+    df_train = df_train.replace('None', np.nan)
+    # for i in df_train.drop(['cardio'], axis=1).dropna().columns:
+    #     df_train[i] = df_train[i].astype('float')
+    #     cond = (df_train[i] > df_train[i].quantile(0.95)) | (df_train[i] < df_train[i].quantile(0.05))
+    #     # df_train[i][cond] = df_train[i].mean()
+    #     df_train[i].drop(cond, axis=0)
+
+    for i in df_train.drop(['cardio'], axis=1).columns:
+        df_train[i] = (df_train[i] - df_train[i].mean()) / (df_train[i].max() - df_train[i].min())
 
     print(df_train)
-
-    # df_train['opt_ap_hi'] = (109 + (0.5 * df_train['age'] / 365) + (0.1 * df_train['weight'])) / df_train['ap_hi']
-    #
-    # df_train['opt_ap_lo'] = (63 + (0.1 * df_train['age'] / 365) + (0.15 * df_train['weight'])) / df_train['ap_lo']
 
     df_test = df_train[df_train['cardio'].isnull()]
 
     df_train.dropna(axis=0, inplace=True)
 
-    dx, dxt, dy, dyt = train_test_split(df_train.drop(['cardio'], axis=1), df_train.cardio, train_size=0.6)
+    dx, dxt, dy, dyt = train_test_split(df_train.drop(['cardio'], axis=1), df_train.cardio, train_size=0.99)
 
-    # model = ExtraTreesClassifier(n_estimators=1000, n_jobs=3, max_features='sqrt', max_depth=10)
+    model = ExtraTreesClassifier(n_estimators=1000, n_jobs=3, max_features='sqrt', max_depth=13)
     # model = AdaBoostClassifier()
     # model = LogisticRegression()
     # model = SVC(probability=True)
-    # model = GradientBoostingClassifier()
-    # model = XGBClassifier(objective='binary:logistic')
+    model = GradientBoostingClassifier()
+    # model = XGBClassifier(objective='binary:logistic', max_depth=3, learning_rate=0.01,
+    #                       subsample=0.8, colsample_bytree=0.8, n_estimators=5000)
 
     print(dx.shape, dxt.shape)
     # title = "Learning Curves"
@@ -110,9 +122,14 @@ def main():
 
     # plt.show()
 
-    # print(-cross_val_score(model, df_train.drop(['cardio'], axis=1), df_train.cardio, cv=6, scoring='neg_log_loss', n_jobs=3).mean())
+    print(-cross_val_score(model, df_train.drop(['cardio'], axis=1), df_train.cardio, cv=6,
+                           scoring='neg_log_loss', n_jobs=3).mean())
 
-    model.fit(dx, dy)
+    exit()
+
+    model.fit(dx, dy,
+              #eval_metric='logloss', early_stopping_rounds=100, eval_set=[(dx, dy), (dxt, dyt)]
+              )
 
     print(list(zip(dx.columns,model.feature_importances_)))
 
@@ -126,11 +143,11 @@ def main():
     print('#################ROC: ', roc_auc_score(dyt, pred_t[:,1]))
     counter(pd.DataFrame(pred_t), 0)
 
-    df_sub[0] = model.predict_proba(df_test.drop(['cardio'], axis=1))
+    df_sub[0] = model.predict_proba(df_test.drop(['cardio'], axis=1))[:,1]
     print('#################SUB: ')
     counter(df_sub, 0)
 
-    # print(model.predict_proba(df_test.drop(['cardio'], axis=1)))
+    print(model.predict_proba(df_test.drop(['cardio'], axis=1)))
     # print(df_sub)
 
     df_sub.to_csv('sub_base.csv', index_label=False, index=False, header=False, sep=';')
